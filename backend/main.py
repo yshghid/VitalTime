@@ -20,7 +20,6 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from transformers import AutoModelForCausalLM, AutoTokenizer
 
 load_dotenv()
 
@@ -445,7 +444,6 @@ def generate_medical_report(patient_info: Page3PatientInfo, hospital_info: Hospi
 async def train_lstm_model(session: AsyncSession):
     from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
     from sklearn.preprocessing import StandardScaler
-    import tensorflow as tf
     from tensorflow.keras.layers import LSTM, Dense, Dropout
     from tensorflow.keras.models import Sequential
     from tensorflow.keras.optimizers import Adam
