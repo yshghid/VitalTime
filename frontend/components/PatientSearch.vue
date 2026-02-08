@@ -161,7 +161,7 @@ const fetchPatientInfo = async () => {
     error.value = ''
 
     // Use fixed timestamp as requested
-    const timestamp = new Date('2025-01-01T08:00:00').toISOString()
+    const timestamp = new Date('2025-01-02T12:00:00').toISOString()
 
     const response = await api.get('/api/get-patient-info', {
       params: { timestamp }
