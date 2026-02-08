@@ -200,3 +200,8 @@ config.js
 # Custom ignores
 venv-arm/
 saved_models/
+
+# Terraform
+terraform/.terraform/
+terraform/terraform.tfstate*
+terraform/.terraform.lock.hcl

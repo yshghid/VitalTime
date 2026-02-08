@@ -12,12 +12,13 @@ const MonitoringDashboard = {
       loading.value = true
       error.value = null
       try {
-        const apiRes = await fetch('http://localhost:8001/api/monitoring/api')
+        const baseUrl = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || 'http://localhost:8001'
+        const apiRes = await fetch(`${baseUrl}/api/monitoring/api`)
         if (!apiRes.ok) throw new Error(`API logs: ${apiRes.statusText}`)
         const apiData = await apiRes.json()
         apiLogs.value = apiData.map(log => JSON.parse(log.replace(/'/g, '"')))
 
-        const mlRes = await fetch('http://localhost:8001/api/monitoring/ml')
+        const mlRes = await fetch(`${baseUrl}/api/monitoring/ml`)
         if (!mlRes.ok) throw new Error(`ML logs: ${mlRes.statusText}`)
         const mlData = await mlRes.json()
         mlLogs.value = mlData.map(log => JSON.parse(log))
