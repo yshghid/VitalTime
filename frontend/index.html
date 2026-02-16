@@ -168,7 +168,7 @@
                 setup() {
                     const router = useRouter();
                     const goHome = () => {
-                        router.push('/');
+                        router.push('/dashboard');
                     };
                     return { goHome };
                 }
@@ -396,6 +396,16 @@
                             </div>
                         </app-header>
 
+                        <!-- Start Time Banner -->
+                        <div v-if="systemStartTime" class="max-w-6xl mx-auto px-6 pt-4">
+                            <div class="bg-green-50 border border-green-200 rounded-lg px-4 py-2 flex items-center gap-2 text-sm text-green-800">
+                                <div class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                                <span class="font-medium">AIops 실행 중</span>
+                                <span class="text-green-600">|</span>
+                                <span>실행 시작 시간: {{ systemStartTime }}</span>
+                            </div>
+                        </div>
+
                         <!-- Patient Cards Section -->
                         <div class="max-w-6xl mx-auto p-6">
                             <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -481,6 +491,17 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                                 </svg>
                                 AI 상태 대시보드
+                            </button>
+                            <button
+                                @click="stopSystem"
+                                :disabled="stopping"
+                                class="px-6 py-3 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2 disabled:opacity-50"
+                            >
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
+                                </svg>
+                                {{ stopping ? '종료 중...' : 'AIops 실행 종료' }}
                             </button>
                         </div>
 
@@ -758,6 +779,33 @@
                         return ts.replace('T', ' ').substring(0, 19);
                     };
 
+                    // 시스템 시작 시간
+                    const route = useRoute();
+                    const systemStartTime = ref('');
+                    const stopping = ref(false);
+
+                    const formatStartTime = (isoStr) => {
+                        if (!isoStr) return '';
+                        const d = new Date(isoStr);
+                        return d.toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                    };
+
+                    if (route.query.startTime) {
+                        systemStartTime.value = formatStartTime(route.query.startTime);
+                    }
+
+                    const stopSystem = async () => {
+                        if (!confirm('VitalTime AIops를 종료하시겠습니까?\n데이터와 학습이 모두 초기화됩니다.')) return;
+                        stopping.value = true;
+                        try {
+                            await axios.post('/api/system/stop');
+                            router.replace('/');
+                        } catch (e) {
+                            alert('시스템 종료에 실패했습니다.');
+                            stopping.value = false;
+                        }
+                    };
+
                     return {
                         patientList,
                         displayedPatients,
@@ -774,7 +822,10 @@
                         clinicalStats,
                         dataLoading,
                         openDataViewer,
-                        formatTs
+                        formatTs,
+                        systemStartTime,
+                        stopping,
+                        stopSystem
                     };
                 }
             };
@@ -1688,10 +1739,81 @@
                 }
             };
 
+            // ====================================
+            // 랜딩 페이지 (시스템 시작/대기)
+            // ====================================
+            const LandingPage = {
+                template: `
+                    <div class="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50 flex items-center justify-center">
+                        <div class="text-center max-w-lg mx-auto p-8">
+                            <div class="mb-8">
+                                <div class="w-14 h-14 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+                                    <svg class="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z" />
+                                    </svg>
+                                </div>
+                                <h1 class="text-2xl font-bold text-gray-900 mb-2">VitalTime</h1>
+                                <p class="text-sm text-gray-500">AIops 실시간 환자 모니터링 시스템</p>
+                            </div>
+
+                            <div v-if="error" class="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                                {{ error }}
+                            </div>
+
+                            <button
+                                v-if="!starting"
+                                @click="startSystem"
+                                class="px-6 py-3 bg-blue-600 text-white text-sm font-semibold rounded-xl hover:bg-blue-700 shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
+                            >
+                                VitalTime AIops 실행
+                            </button>
+
+                            <div v-if="starting" class="space-y-4">
+                                <div class="flex items-center justify-center gap-3">
+                                    <div class="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                                    <span class="text-gray-700 font-medium">시스템 시작 중...</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                `,
+                setup() {
+                    const router = useRouter();
+                    const starting = ref(false);
+                    const error = ref('');
+
+                    const checkStatus = async () => {
+                        try {
+                            const res = await axios.get('/api/system/status');
+                            if (res.data.running) {
+                                router.replace({ name: 'PatientList', query: { startTime: res.data.start_time } });
+                            }
+                        } catch (e) {}
+                    };
+
+                    const startSystem = async () => {
+                        starting.value = true;
+                        error.value = '';
+                        try {
+                            const res = await axios.post('/api/system/start');
+                            router.replace({ name: 'PatientList', query: { startTime: res.data.start_time } });
+                        } catch (e) {
+                            error.value = '시스템 시작에 실패했습니다. 다시 시도해주세요.';
+                            starting.value = false;
+                        }
+                    };
+
+                    onMounted(checkStatus);
+
+                    return { starting, error, startSystem };
+                }
+            };
+
             const router = createRouter({
                 history: createWebHashHistory(),
                 routes: [
-                    { path: '/', name: 'PatientList', component: PatientList },
+                    { path: '/', name: 'Landing', component: LandingPage },
+                    { path: '/dashboard', name: 'PatientList', component: PatientList },
                     { path: '/detail', name: 'PatientDetail', component: PatientDetail },
                     { path: '/patient-report', name: 'PatientReport', component: PatientReport }
                 ]

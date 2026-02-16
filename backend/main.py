@@ -172,7 +172,7 @@ async def get_patient_info_crud(timestamp: datetime, session: AsyncSession) -> P
             p.patient_name, p.patient_id,
             c_cur.timestamp AS cur_timestamp,
             c_cur.news_score AS cur_news,
-            c_next.news_score AS cur_predicted
+            COALESCE(p.predicted_news, 0) AS cur_predicted
         FROM public.patient p
         JOIN (
             SELECT c1.*
@@ -184,15 +184,6 @@ async def get_patient_info_crud(timestamp: datetime, session: AsyncSession) -> P
                 GROUP BY patient_id
             ) c2 ON c1.patient_id = c2.patient_id AND c1.timestamp = c2.max_ts
         ) c_cur ON p.patient_id = c_cur.patient_id
-        LEFT JOIN LATERAL (
-            SELECT c2.news_score
-            FROM public.clinical_data c2
-            WHERE c2.patient_id = c_cur.patient_id
-              AND c2.timestamp > c_cur.timestamp
-              AND c2.timestamp <= c_cur.timestamp + INTERVAL '2 minutes'
-            ORDER BY c2.timestamp ASC
-            LIMIT 1
-        ) c_next ON TRUE
         ORDER BY p.patient_id;
     """)
 
@@ -531,6 +522,23 @@ async def train_lstm_model(session: AsyncSession):
 
         ml_logger.info(json.dumps({"event": "model_training", "timestamp": datetime.now().isoformat(), "model_info": model_info}, ensure_ascii=False))
 
+        # 학습 완료 후 각 환자별 예측값을 DB에 저장
+        for patient_id in range(1, 11):
+            patient_df = clinical_df[clinical_df["patient_id"] == patient_id].copy()
+            patient_df = patient_df.sort_values("timepoint")
+            if len(patient_df) >= 10:
+                features = patient_df[[c for c in feature_columns if c != "news_score"]].tail(10).values
+                X_patient = scaler_X.transform(features).reshape(1, 10, 9)
+                y_pred_scaled = model.predict(X_patient, verbose=0)
+                y_pred_patient = scaler_y.inverse_transform(y_pred_scaled.reshape(-1, 1)).reshape(-1)
+                predicted_news = int(round(max(0, min(10, y_pred_patient[-1]))))
+                await session.execute(
+                    text("UPDATE patient SET predicted_news = :pred WHERE patient_id = :pid"),
+                    {"pred": predicted_news, "pid": patient_id},
+                )
+        await session.commit()
+        print(f"[LSTM] 환자별 예측값 DB 저장 완료")
+
         return {
             "evaluation": {"mse": float(mse), "mae": float(mae), "r2": float(r2)},
             "data_info": model_info["data_info"],
@@ -549,14 +557,17 @@ async def train_lstm_model(session: AsyncSession):
 _session_factory = None
 _main_loop = None
 _server_start_time = None
+_scheduler_running = False
+_system_running = False
+_system_start_time = None
 
 
 async def scheduled_train_lstm():
-    if _session_factory is None:
+    if _session_factory is None or not _system_running:
         return
-    # 서버 시작 10분 후부터 학습
-    if _server_start_time and (datetime.now() - _server_start_time).total_seconds() < 600:
-        remaining = 600 - (datetime.now() - _server_start_time).total_seconds()
+    # 시스템 시작 10분 후부터 학습
+    if _system_start_time and (datetime.now() - _system_start_time).total_seconds() < 600:
+        remaining = 600 - (datetime.now() - _system_start_time).total_seconds()
         print(f"[LSTM] 데이터 수집 중... 학습 시작까지 {int(remaining)}초 남음")
         return
     async with _session_factory() as session:
@@ -568,22 +579,37 @@ async def scheduled_train_lstm():
 
 
 def run_scheduled_training():
-    if _main_loop:
+    if _main_loop and _system_running:
         asyncio.run_coroutine_threadsafe(scheduled_train_lstm(), _main_loop)
 
 
 def start_training_scheduler(factory, loop):
-    global _session_factory, _main_loop, _server_start_time
+    global _session_factory, _main_loop, _server_start_time, _scheduler_running
     _session_factory = factory
     _main_loop = loop
     _server_start_time = datetime.now()
+    _scheduler_running = True
+    schedule.clear()
     schedule.every(1).minutes.do(run_scheduled_training)
     schedule.every(1).minutes.do(run_scheduled_data_gen)
     schedule.every().day.at("08:00").do(run_scheduled_daily_cleanup)
-    t = threading.Thread(target=lambda: [schedule.run_pending() or time.sleep(1) for _ in iter(int, 1)], daemon=True)
+    t = threading.Thread(target=_scheduler_loop, daemon=True)
     t.start()
     print("스케줄러 시작: 데이터 생성(1분), 일일 정리(08:00), LSTM 학습(1분, 10분 후 시작)")
     return t
+
+
+def _scheduler_loop():
+    while _scheduler_running:
+        schedule.run_pending()
+        time.sleep(1)
+
+
+def stop_scheduler():
+    global _scheduler_running
+    _scheduler_running = False
+    schedule.clear()
+    print("[System] 스케줄러 중지")
 
 
 # ====================================
@@ -718,14 +744,14 @@ async def daily_cleanup(session_factory):
 
 
 def run_scheduled_data_gen():
-    if _main_loop and _session_factory:
+    if _main_loop and _session_factory and _system_running:
         asyncio.run_coroutine_threadsafe(
             generate_and_insert_data(_session_factory), _main_loop
         )
 
 
 def run_scheduled_daily_cleanup():
-    if _main_loop and _session_factory:
+    if _main_loop and _session_factory and _system_running:
         asyncio.run_coroutine_threadsafe(
             daily_cleanup(_session_factory), _main_loop
         )
@@ -765,7 +791,7 @@ app.middleware("http")(log_requests)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -783,18 +809,12 @@ async def startup():
     connect()
     try:
         factory = get_session_factory()
-        # 기존 clinical_data 초기화 후 시퀀스 리셋
         async with factory() as session:
-            await session.execute(text("TRUNCATE clinical_data RESTART IDENTITY"))
+            await session.execute(text("ALTER TABLE patient ADD COLUMN IF NOT EXISTS predicted_news INTEGER DEFAULT 0"))
             await session.commit()
-            print("[Startup] clinical_data 초기화 완료")
-
-        loop = asyncio.get_running_loop()
-        start_training_scheduler(factory, loop)
-        # 서버 시작 시 즉시 데이터 생성
-        await generate_and_insert_data(factory)
+        print("[Startup] DB 준비 완료 - /api/system/start 호출 대기 중")
     except Exception as e:
-        print(f"스케줄러/데이터생성 시작 실패: {e}")
+        print(f"DB 초기화 실패: {e}")
 
 
 @app.on_event("shutdown")
@@ -974,7 +994,70 @@ async def db_health(session: AsyncSession = Depends(get_db_session)):
 
 @app.get("/schedule-status")
 async def get_schedule_status():
-    return {"status": "active", "schedule": "1분마다 LSTM 모델 학습"}
+    return {"status": "active" if _system_running else "inactive", "schedule": "1분마다 LSTM 모델 학습"}
+
+
+# ====================================
+# 시스템 시작/종료 제어
+# ====================================
+
+@app.get("/api/system/status", tags=["System"])
+async def system_status():
+    return {
+        "running": _system_running,
+        "start_time": _system_start_time.isoformat() if _system_start_time else None,
+    }
+
+
+@app.post("/api/system/start", tags=["System"])
+async def system_start():
+    global _system_running, _system_start_time
+    if _system_running:
+        return {"status": "already_running", "start_time": _system_start_time.isoformat()}
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(text("TRUNCATE clinical_data RESTART IDENTITY"))
+            await session.execute(text("UPDATE patient SET predicted_news = 0"))
+            await session.commit()
+
+        _system_start_time = datetime.now()
+        _system_running = True
+
+        loop = asyncio.get_running_loop()
+        start_training_scheduler(factory, loop)
+        await generate_and_insert_data(factory)
+
+        print(f"[System] 시스템 시작: {_system_start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        return {"status": "started", "start_time": _system_start_time.isoformat()}
+    except Exception as e:
+        _system_running = False
+        _system_start_time = None
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/system/stop", tags=["System"])
+async def system_stop():
+    global _system_running, _system_start_time
+    if not _system_running:
+        return {"status": "not_running"}
+
+    stop_scheduler()
+
+    try:
+        factory = get_session_factory()
+        async with factory() as session:
+            await session.execute(text("TRUNCATE clinical_data RESTART IDENTITY"))
+            await session.execute(text("UPDATE patient SET predicted_news = 0"))
+            await session.commit()
+    except Exception as e:
+        print(f"[System] 정리 중 오류: {e}")
+
+    _system_running = False
+    _system_start_time = None
+    print("[System] 시스템 종료")
+    return {"status": "stopped"}
 
 
 if __name__ == "__main__":

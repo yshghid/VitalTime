@@ -76,7 +76,8 @@ CREATE TABLE public.patient (
     patient_name character varying(100),
     severity integer,
     doctor_name character varying(100),
-    hospital_name character varying(200)
+    hospital_name character varying(200),
+    predicted_news integer DEFAULT 0
 );
 
 

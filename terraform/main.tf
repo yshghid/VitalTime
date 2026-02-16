@@ -507,7 +507,7 @@ resource "aws_ecs_task_definition" "frontend" {
       protocol      = "tcp"
     }]
     environment = [
-      { name = "GOOGLE_MAPS_API_KEY", value = "" },
+      { name = "GOOGLE_MAPS_API_KEY", value = "AIzaSyBg7yQGwnnM2_EcmKdqv9TyU8I-yk_oWaU" },
       { name = "API_BASE_URL", value = "" }
     ]
     logConfiguration = {
