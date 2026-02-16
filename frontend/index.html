@@ -146,7 +146,7 @@
 
     <script src="config.js"></script>
     <script>
-        axios.defaults.baseURL = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || 'http://localhost:8001';
+        axios.defaults.baseURL = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || '';
 
         function initVueApp() {
             const { createApp, ref, onMounted, onUnmounted, computed } = Vue;

@@ -143,7 +143,7 @@ const router = useRouter()
 
 // Configure axios
 const api = axios.create({
-  baseURL: (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || 'http://localhost:8001'
+  baseURL: (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || ''
 })
 
 // Reactive state

@@ -12,7 +12,7 @@ const MonitoringDashboard = {
       loading.value = true
       error.value = null
       try {
-        const baseUrl = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || 'http://localhost:8001'
+        const baseUrl = (window.APP_CONFIG && window.APP_CONFIG.API_BASE_URL) || ''
         const apiRes = await fetch(`${baseUrl}/api/monitoring/api`)
         if (!apiRes.ok) throw new Error(`API logs: ${apiRes.statusText}`)
         const apiData = await apiRes.json()
