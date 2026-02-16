@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import pickle
+import random
 import threading
 import time
 from datetime import datetime, timedelta
@@ -161,7 +162,7 @@ class AIReportRequest(BaseModel):
 async def get_patient_info_crud(timestamp: datetime, session: AsyncSession) -> PatientInfoResponse:
     """기준 timestamp 기반 환자 정보 조회"""
     if timestamp.tzinfo is not None:
-        timestamp = timestamp.replace(tzinfo=None)
+        timestamp = timestamp.astimezone().replace(tzinfo=None)
 
     start_time = timestamp - timedelta(hours=8)
     end_time = timestamp
@@ -170,7 +171,7 @@ async def get_patient_info_crud(timestamp: datetime, session: AsyncSession) -> P
         SELECT
             p.patient_name, p.patient_id,
             c_cur.timestamp AS cur_timestamp,
-            c_cur.news_score_label AS cur_news,
+            c_cur.news_score AS cur_news,
             c_next.news_score AS cur_predicted
         FROM public.patient p
         JOIN (
@@ -188,7 +189,7 @@ async def get_patient_info_crud(timestamp: datetime, session: AsyncSession) -> P
             FROM public.clinical_data c2
             WHERE c2.patient_id = c_cur.patient_id
               AND c2.timestamp > c_cur.timestamp
-              AND c2.timestamp <= c_cur.timestamp + INTERVAL '8 hours'
+              AND c2.timestamp <= c_cur.timestamp + INTERVAL '2 minutes'
             ORDER BY c2.timestamp ASC
             LIMIT 1
         ) c_next ON TRUE
@@ -222,7 +223,7 @@ async def get_patient_info_crud(timestamp: datetime, session: AsyncSession) -> P
 async def get_patient_data_range_crud(patient_id: int, timestamp: datetime, session: AsyncSession):
     """특정 환자의 8시간 범위 데이터 조회"""
     if timestamp.tzinfo is not None:
-        timestamp = timestamp.replace(tzinfo=None)
+        timestamp = timestamp.astimezone().replace(tzinfo=None)
 
     start_time = timestamp - timedelta(hours=8)
     end_time = timestamp
@@ -359,7 +360,7 @@ async def get_all_clinical_data(session: AsyncSession):
 
     return {
         "data": data,
-        "dataframe_info": {"shape": df.shape, "columns": list(df.columns), "dtypes": df.dtypes.to_dict()},
+        "dataframe_info": {"shape": list(df.shape), "columns": list(df.columns), "dtypes": {k: str(v) for k, v in df.dtypes.items()}},
         "statistics": stats,
     }
 
@@ -464,8 +465,8 @@ async def train_lstm_model(session: AsyncSession):
         for patient_id in range(1, 11):
             patient_df = clinical_df[clinical_df["patient_id"] == patient_id].copy()
             patient_df = patient_df.sort_values("timepoint")
-            if len(patient_df) == 10:
-                patients_data.append(patient_df[feature_columns].values)
+            if len(patient_df) >= 10:
+                patients_data.append(patient_df[feature_columns].tail(10).values)
 
         if not patients_data:
             raise Exception("충분한 데이터가 없습니다.")
@@ -547,10 +548,16 @@ async def train_lstm_model(session: AsyncSession):
 
 _session_factory = None
 _main_loop = None
+_server_start_time = None
 
 
 async def scheduled_train_lstm():
     if _session_factory is None:
+        return
+    # 서버 시작 10분 후부터 학습
+    if _server_start_time and (datetime.now() - _server_start_time).total_seconds() < 600:
+        remaining = 600 - (datetime.now() - _server_start_time).total_seconds()
+        print(f"[LSTM] 데이터 수집 중... 학습 시작까지 {int(remaining)}초 남음")
         return
     async with _session_factory() as session:
         try:
@@ -566,14 +573,162 @@ def run_scheduled_training():
 
 
 def start_training_scheduler(factory, loop):
-    global _session_factory, _main_loop
+    global _session_factory, _main_loop, _server_start_time
     _session_factory = factory
     _main_loop = loop
-    schedule.every(8).hours.do(run_scheduled_training)
+    _server_start_time = datetime.now()
+    schedule.every(1).minutes.do(run_scheduled_training)
+    schedule.every(1).minutes.do(run_scheduled_data_gen)
+    schedule.every().day.at("08:00").do(run_scheduled_daily_cleanup)
     t = threading.Thread(target=lambda: [schedule.run_pending() or time.sleep(1) for _ in iter(int, 1)], daemon=True)
     t.start()
-    print("LSTM 모델 학습 스케줄러가 시작되었습니다 (8시간 간격).")
+    print("스케줄러 시작: 데이터 생성(1분), 일일 정리(08:00), LSTM 학습(1분, 10분 후 시작)")
     return t
+
+
+# ====================================
+# 자동 데이터 생성기
+# ====================================
+
+# 실제 데이터 기반 범위 (dump.sql 참고)
+CLINICAL_RANGES = {
+    "creatinine": (0.31, 2.41),
+    "hemoglobin": (11.1, 15.9),
+    "ldh": (149, 599),
+    "lymphocytes": (0.99, 3.41),
+    "neutrophils": (2.18, 8.93),
+    "platelet_count": (156.0, 400.0),
+    "wbc_count": (4.0, 11.9),
+    "hs_crp": (0.61, 39.08),
+    "d_dimer": (0.06, 4.99),
+    "news_score": (1, 10),
+}
+
+PATIENT_IDS = list(range(1, 11))
+
+
+def generate_clinical_record(patient_id: int, ts: datetime, timepoint: int) -> dict:
+    """환자 1명에 대한 랜덤 임상 데이터 1건 생성"""
+    r = CLINICAL_RANGES
+    news = random.randint(*r["news_score"])
+    # news_score_label: news_score 기준으로 ±2 랜덤 오프셋
+    label = max(1, min(10, news + random.randint(-2, 2)))
+    return {
+        "patient_id": patient_id,
+        "timestamp": ts,
+        "timepoint": timepoint,
+        "creatinine": round(random.uniform(*r["creatinine"]), 2),
+        "hemoglobin": round(random.uniform(*r["hemoglobin"]), 2),
+        "ldh": random.randint(*r["ldh"]),
+        "lymphocytes": round(random.uniform(*r["lymphocytes"]), 2),
+        "neutrophils": round(random.uniform(*r["neutrophils"]), 2),
+        "platelet_count": round(random.uniform(*r["platelet_count"]), 2),
+        "wbc_count": round(random.uniform(*r["wbc_count"]), 2),
+        "hs_crp": round(random.uniform(*r["hs_crp"]), 2),
+        "d_dimer": round(random.uniform(*r["d_dimer"]), 2),
+        "news_score": news,
+        "news_score_label": label,
+    }
+
+
+async def generate_and_insert_data(session_factory):
+    """모든 환자에 대해 현재 시간 기준 임상 데이터 생성 후 DB 삽입"""
+    if session_factory is None:
+        return
+
+    now = datetime.now()
+    async with session_factory() as session:
+        try:
+            # 현재 가장 큰 timepoint 조회
+            result = await session.execute(
+                text("SELECT patient_id, COALESCE(MAX(timepoint), 0) as max_tp "
+                     "FROM clinical_data GROUP BY patient_id")
+            )
+            tp_map = {row[0]: row[1] for row in result.fetchall()}
+
+            inserted = 0
+            for pid in PATIENT_IDS:
+                next_tp = tp_map.get(pid, 0) + 1
+                record = generate_clinical_record(pid, now, next_tp)
+                await session.execute(
+                    text(
+                        "INSERT INTO clinical_data "
+                        "(patient_id, timestamp, timepoint, creatinine, hemoglobin, ldh, "
+                        "lymphocytes, neutrophils, platelet_count, wbc_count, hs_crp, "
+                        "d_dimer, news_score, news_score_label) "
+                        "VALUES (:patient_id, :timestamp, :timepoint, :creatinine, :hemoglobin, :ldh, "
+                        ":lymphocytes, :neutrophils, :platelet_count, :wbc_count, :hs_crp, "
+                        ":d_dimer, :news_score, :news_score_label)"
+                    ),
+                    record,
+                )
+                inserted += 1
+
+            # severity 갱신: 최신 news_score로 patient.severity 업데이트
+            await session.execute(
+                text(
+                    "UPDATE patient p SET severity = sub.news_score "
+                    "FROM ("
+                    "  SELECT DISTINCT ON (patient_id) patient_id, news_score "
+                    "  FROM clinical_data ORDER BY patient_id, timestamp DESC"
+                    ") sub WHERE p.patient_id = sub.patient_id"
+                )
+            )
+
+            await session.commit()
+            print(f"[DataGen] {now.strftime('%H:%M:%S')} - {inserted}건 생성")
+        except Exception as e:
+            await session.rollback()
+            print(f"[DataGen] 데이터 생성 실패: {e}")
+
+
+async def daily_cleanup(session_factory):
+    """매일 08:00 실행: 전일 08:00 ~ 금일 07:59 데이터 삭제 + timepoint 리셋"""
+    if session_factory is None:
+        return
+
+    now = datetime.now()
+    today_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    yesterday_8am = today_8am - timedelta(days=1)
+
+    async with session_factory() as session:
+        try:
+            result = await session.execute(
+                text(
+                    "DELETE FROM clinical_data "
+                    "WHERE timestamp >= :start AND timestamp < :end"
+                ),
+                {"start": yesterday_8am, "end": today_8am},
+            )
+            deleted = result.rowcount
+
+            # timepoint 리셋: 시퀀스 초기화
+            await session.execute(
+                text("SELECT setval('clinical_data_clinical_id_seq', "
+                     "COALESCE((SELECT MAX(clinical_id) FROM clinical_data), 0) + 1, false)")
+            )
+
+            await session.commit()
+            print(f"[Cleanup] {now.strftime('%H:%M:%S')} - "
+                  f"{yesterday_8am.strftime('%m/%d')} 08:00~{today_8am.strftime('%m/%d')} 08:00 "
+                  f"데이터 {deleted}건 삭제")
+        except Exception as e:
+            await session.rollback()
+            print(f"[Cleanup] 일일 정리 실패: {e}")
+
+
+def run_scheduled_data_gen():
+    if _main_loop and _session_factory:
+        asyncio.run_coroutine_threadsafe(
+            generate_and_insert_data(_session_factory), _main_loop
+        )
+
+
+def run_scheduled_daily_cleanup():
+    if _main_loop and _session_factory:
+        asyncio.run_coroutine_threadsafe(
+            daily_cleanup(_session_factory), _main_loop
+        )
 
 
 # ====================================
@@ -619,13 +774,27 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
+    # 이전 세션 로그 파일 초기화
+    for log_file in ["api_monitoring.log", "ml_monitoring.log"]:
+        log_path = os.path.join(LOGS_DIR, log_file)
+        open(log_path, "w").close()
+    print("[Startup] 로그 파일 초기화 완료")
+
     connect()
     try:
-        loop = asyncio.get_running_loop()
         factory = get_session_factory()
+        # 기존 clinical_data 초기화 후 시퀀스 리셋
+        async with factory() as session:
+            await session.execute(text("TRUNCATE clinical_data RESTART IDENTITY"))
+            await session.commit()
+            print("[Startup] clinical_data 초기화 완료")
+
+        loop = asyncio.get_running_loop()
         start_training_scheduler(factory, loop)
+        # 서버 시작 시 즉시 데이터 생성
+        await generate_and_insert_data(factory)
     except Exception as e:
-        print(f"스케줄러 시작 실패: {e}")
+        print(f"스케줄러/데이터생성 시작 실패: {e}")
 
 
 @app.on_event("shutdown")
@@ -671,6 +840,15 @@ async def get_patient_predicted_by_timestamp(
 ):
     try:
         return await get_patient_predicted_by_timestamp_crud(patient_id, timestamp, session)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/clinical-data", tags=["Clinical Data"])
+async def get_clinical_data(session: AsyncSession = Depends(get_db_session)):
+    """전체 clinical_data 조회"""
+    try:
+        return await get_all_clinical_data(session)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -796,7 +974,7 @@ async def db_health(session: AsyncSession = Depends(get_db_session)):
 
 @app.get("/schedule-status")
 async def get_schedule_status():
-    return {"status": "active", "schedule": "8시간마다 LSTM 모델 학습"}
+    return {"status": "active", "schedule": "1분마다 LSTM 모델 학습"}
 
 
 if __name__ == "__main__":

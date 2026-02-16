@@ -430,7 +430,7 @@
                                                 </div>
                                             </div>
                                             <div class="flex items-center justify-between">
-                                                <span class="text-sm text-gray-500">8시간 뒤 예측 중증도</span>
+                                                <span class="text-sm text-gray-500">1분 뒤 예측 중증도</span>
                                                 <div class="flex items-center">
                                                     <div class="w-16 bg-gray-200 rounded-full h-2 mr-2">
                                                         <div
@@ -462,8 +462,17 @@
                             </div>
                         </div>
 
-                        <!-- AI 상태 대시보드 버튼 -->
-                        <div class="fixed bottom-8 right-8">
+                        <!-- 하단 고정 버튼들 -->
+                        <div class="fixed bottom-8 right-8 flex flex-col gap-3 items-end">
+                            <button
+                                @click="openDataViewer"
+                                class="px-6 py-3 bg-blue-600 text-white rounded-lg font-semibold hover:bg-blue-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
+                            >
+                                <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                데이터 확인하기
+                            </button>
                             <button
                                 @click="goToMonitoring"
                                 class="px-6 py-3 bg-purple-600 text-white rounded-lg font-semibold hover:bg-purple-700 shadow-lg hover:shadow-xl transition-all flex items-center gap-2"
@@ -473,6 +482,62 @@
                                 </svg>
                                 AI 상태 대시보드
                             </button>
+                        </div>
+
+                        <!-- 데이터 확인 모달 -->
+                        <div v-if="showDataViewer" class="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+                            <div class="bg-white rounded-xl shadow-2xl w-full max-w-7xl max-h-[90vh] flex flex-col">
+                                <div class="flex items-center justify-between px-6 py-4 border-b">
+                                    <h2 class="text-xl font-bold text-gray-800">Clinical Data</h2>
+                                    <div class="flex items-center gap-4">
+                                        <span v-if="clinicalStats" class="text-sm text-gray-500">
+                                            총 {{ clinicalStats.total_records }}건 · 환자 {{ clinicalStats.unique_patients }}명
+                                        </span>
+                                        <button @click="showDataViewer = false" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+                                    </div>
+                                </div>
+                                <div class="overflow-auto flex-1 px-6 py-4">
+                                    <div v-if="dataLoading" class="flex justify-center py-12">
+                                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                                    </div>
+                                    <table v-else class="w-full text-sm border-collapse">
+                                        <thead class="sticky top-0 bg-gray-50">
+                                            <tr>
+                                                <th class="px-3 py-2 text-left border-b font-semibold text-gray-600">Patient</th>
+                                                <th class="px-3 py-2 text-left border-b font-semibold text-gray-600">Timestamp</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">TP</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">Creatinine</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">Hemoglobin</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">LDH</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">Lymphocytes</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">Neutrophils</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">Platelet</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">WBC</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">hs-CRP</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">D-Dimer</th>
+                                                <th class="px-3 py-2 text-right border-b font-semibold text-gray-600">NEWS</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="row in clinicalData" :key="row.clinical_id" class="hover:bg-gray-50 border-b border-gray-100">
+                                                <td class="px-3 py-2 text-gray-800">{{ row.patient_id }}</td>
+                                                <td class="px-3 py-2 text-gray-500 text-xs">{{ formatTs(row.timestamp) }}</td>
+                                                <td class="px-3 py-2 text-right text-gray-600">{{ row.timepoint }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.creatinine ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.hemoglobin ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.ldh ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.lymphocytes ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.neutrophils ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.platelet_count ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.wbc_count ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.hs_crp ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right">{{ row.d_dimer ?? '-' }}</td>
+                                                <td class="px-3 py-2 text-right font-semibold" :class="row.news_score >= 7 ? 'text-red-600' : row.news_score >= 4 ? 'text-yellow-600' : 'text-green-600'">{{ row.news_score ?? '-' }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 `,
@@ -486,7 +551,7 @@
                     const getPatientInfoList = async () => {
                         try {
                             loading.value = true;
-                            const timestamp = new Date('2025-01-02T12:00:00').toISOString();
+                            const timestamp = new Date().toISOString();
                             const response = await axios.get('/api/get-patient-info', {
                                 params: { timestamp }
                             });
@@ -591,7 +656,7 @@
                         }
 
                         const patientNames = criticalPatients.map(p => p.name).join(', ');
-                        const message = `긴급, ${patientNames} 님이 8시간 뒤 예측 중증도 위험합니다.`;
+                        const message = `긴급, ${patientNames} 님이 1분 뒤 예측 중증도 위험합니다.`;
 
                         const playSequence = () => {
                             window.speechSynthesis.cancel();
@@ -667,6 +732,32 @@
                         window.location.href = '/monitoring.html';
                     };
 
+                    // 데이터 확인하기
+                    const showDataViewer = ref(false);
+                    const clinicalData = ref([]);
+                    const clinicalStats = ref(null);
+                    const dataLoading = ref(false);
+
+                    const openDataViewer = async () => {
+                        showDataViewer.value = true;
+                        dataLoading.value = true;
+                        try {
+                            const res = await axios.get('/api/clinical-data');
+                            clinicalData.value = res.data.data || [];
+                            clinicalStats.value = res.data.statistics || null;
+                        } catch (e) {
+                            console.error('데이터 조회 실패:', e);
+                            clinicalData.value = [];
+                        } finally {
+                            dataLoading.value = false;
+                        }
+                    };
+
+                    const formatTs = (ts) => {
+                        if (!ts) return '-';
+                        return ts.replace('T', ' ').substring(0, 19);
+                    };
+
                     return {
                         patientList,
                         displayedPatients,
@@ -677,7 +768,13 @@
                         getSeverityBarClass,
                         goToPatientDetail,
                         formatTimestamp,
-                        goToMonitoring
+                        goToMonitoring,
+                        showDataViewer,
+                        clinicalData,
+                        clinicalStats,
+                        dataLoading,
+                        openDataViewer,
+                        formatTs
                     };
                 }
             };
@@ -814,7 +911,7 @@
                                             <!-- Left: Predicted Severity -->
                                             <div class="bg-white border-2 shadow-md rounded-lg p-6">
                                                 <div class="text-center">
-                                                    <div class="text-gray-600 text-sm mb-2">8시간 뒤 예측 중증도</div>
+                                                    <div class="text-gray-600 text-sm mb-2">1분 뒤 예측 중증도</div>
                                                     <div class="text-6xl font-bold" :class="getSeverityColor(predictedSeverity)">
                                                         {{ predictedSeverity !== null ? predictedSeverity : '-' }}
                                                     </div>
@@ -944,7 +1041,7 @@
                             loading.value = true;
 
                             // 현재 timestamp (또는 고정된 테스트 timestamp)
-                            const currentTimestamp = new Date('2025-01-02T12:00:00').toISOString();
+                            const currentTimestamp = new Date().toISOString();
 
                             console.log('=== API 호출 시작 ===');
                             console.log('환자 ID:', patientId.value);

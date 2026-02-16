@@ -108,7 +108,7 @@
             <div class="text-sm text-gray-600 space-y-1">
               <p><span class="font-medium">기록시간:</span> {{ formatTimestamp(patient.timestamp) }}</p>
               <p><span class="font-medium">현재 중증도:</span> {{ patient.cur_news }}</p>
-              <p><span class="font-medium">8시간 뒤 예측 중증도:</span> {{ patient.cur_predicted }}</p>
+              <p><span class="font-medium">1분 뒤 예측 중증도:</span> {{ patient.cur_predicted }}</p>
             </div>
             <div class="mt-4 pt-4 border-t border-gray-100">
               <div class="flex items-center justify-between">
@@ -160,8 +160,7 @@ const fetchPatientInfo = async () => {
     loading.value = true
     error.value = ''
 
-    // Use fixed timestamp as requested
-    const timestamp = new Date('2025-01-02T12:00:00').toISOString()
+    const timestamp = new Date().toISOString()
 
     const response = await api.get('/api/get-patient-info', {
       params: { timestamp }
