@@ -537,7 +537,7 @@ async def train_lstm_model(session: AsyncSession):
                     {"pred": predicted_news, "pid": patient_id},
                 )
         await session.commit()
-        print(f"[LSTM] 환자별 예측값 DB 저장 완료")
+        print("[LSTM] 환자별 예측값 DB 저장 완료")
 
         return {
             "evaluation": {"mse": float(mse), "mae": float(mae), "r2": float(r2)},
